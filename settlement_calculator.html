@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Settlement Loss Calculator</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f5f5f5; padding: 20px; }
+        .container { max-width: 1400px; margin: 0 auto; }
+        .header { background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        h1 { color: #667eea; margin-bottom: 10px; }
+        .content { display: grid; grid-template-columns: 300px 1fr; gap: 20px; }
+        .panel { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .panel h2 { color: #667eea; font-size: 1.1rem; margin-bottom: 15px; border-bottom: 2px solid #667eea; padding-bottom: 10px; }
+        select, input, button { width: 100%; padding: 10px; margin: 8px 0; border: 1px solid #ddd; border-radius: 4px; font-size: 0.95rem; }
+        button { background: #667eea; color: white; cursor: pointer; border: none; font-weight: bold; }
+        button:hover { background: #5568d3; }
+        .button-group { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .results { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-top: 20px; }
+        .metric { text-align: center; padding: 15px; background: #667eea; color: white; border-radius: 4px; margin: 10px 0; }
+        .metric-value { font-size: 1.8rem; font-weight: bold; }
+        .metric-label { font-size: 0.9rem; margin-top: 5px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+        th, td { padding: 10px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background: #667eea; color: white; }
+        tr:hover { background: #f9f9f9; }
+        .error { color: #d32f2f; padding: 10px; background: #ffebee; border-radius: 4px; margin: 10px 0; }
+        .success { color: #388e3c; padding: 10px; background: #e8f5e9; border-radius: 4px; margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Settlement Recognized Loss Calculator</h1>
+            <p>Calculate securities settlement losses using Purchase Loss Method</p>
+        </div>
+
+        <div class="content">
+            <div class="panel">
+                <h2>Controls</h2>
+                <label>Settlement Case:</label>
+                <select id="settlementSelect" onchange="updateSettlementInfo()">
+                    <option value="twitter">Twitter, Inc. (N.D. Cal.) 2016</option>
+                    <option value="kraft">Kraft Heinz Securities Litigation</option>
+                </select>
+                
+                <label>Data Input:</label>
+                <input type="file" id="csvFile" accept=".csv" onchange="handleFileUpload(event)">
+                <button onclick="downloadTemplate()">Download Template</button>
+                
+                <label>Or Paste CSV Data:</label>
+                <textarea id="csvData" style="width:100%; height:150px; padding:10px; border:1px solid #ddd; border-radius:4px;" placeholder="Paste CSV data here..."></textarea>
+                
+                <div class="button-group">
+                    <button onclick="calculateFromData()">Calculate</button>
+                    <button onclick="clearAll()" style="background:#ccc; color:#333;">Clear</button>
+                </div>
+                
+                <div id="message"></div>
+                <div id="settlementInfo" style="margin-top:15px; padding:10px; background:#e3f2fd; border-radius:4px; font-size:0.85rem;"></div>
+            </div>
+
+            <div class="panel">
+                <h2>Results</h2>
+                <div id="resultsArea" style="min-height:300px;">
+                    <p style="color:#999;">No calculation yet. Upload CSV or paste data and click Calculate.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const settlementParams = {
+            twitter: {
+                name: "Twitter, Inc. Securities Litigation",
+                classStartDate: new Date("2015-02-05"),
+                classEndDate: new Date("2015-10-30")
+            },
+            kraft: {
+                name: "Kraft Heinz Securities Litigation",
+                classStartDate: new Date("2015-11-05"),
+                classEndDate: new Date("2019-11-05")
+            }
+        };
+
+        function updateSettlementInfo() {
+            const settlement = document.getElementById('settlementSelect').value;
+            const params = settlementParams[settlement];
+            const info = document.getElementById('settlementInfo');
+            info.innerHTML = `<strong>${params.name}</strong><br>Period: ${params.classStartDate.toLocaleDateString()} to ${params.classEndDate.toLocaleDateString()}`;
+        }
+
+        function handleFileUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            // Check filename for settlement type
+            const filename = file.name.toLowerCase();
+            let detectedSettlement = null;
+            
+            if (filename.includes('twitter')) detectedSettlement = 'twitter';
+            if (filename.includes('kraft')) detectedSettlement = 'kraft';
+            
+            const selectedSettlement = document.getElementById('settlementSelect').value;
+            
+            // Warn if mismatch
+            if (detectedSettlement && detectedSettlement !== selectedSettlement) {
+                showMessage(
+                    `⚠️ Warning: File "${file.name}" appears to be for ${detectedSettlement.toUpperCase()} settlement, but you selected ${selectedSettlement.toUpperCase()}. Please select the correct settlement case.`, 
+                    'error'
+                );
+                document.getElementById('csvFile').value = ''; // Clear file input
+                return;
+            }
+            
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                document.getElementById('csvData').value = e.target.result;
+                showMessage("File loaded successfully. Click Calculate to process.", 'success');
+            };
+            reader.readAsText(file);
+        }
+
+        function parseCSV(text) {
+            const lines = text.trim().split('\n');
+            if (lines.length < 2) return [];
+            
+            // Helper to parse CSV line with quoted values
+            function parseCSVLine(line) {
+                const result = [];
+                let current = '';
+                let inQuotes = false;
+                
+                for (let i = 0; i < line.length; i++) {
+                    const char = line[i];
+                    
+                    if (char === '"') {
+                        inQuotes = !inQuotes;
+                    } else if (char === ',' && !inQuotes) {
+                        result.push(current.trim().replace(/^"(.*)"$/, '$1'));
+                        current = '';
+                    } else {
+                        current += char;
+                    }
+                }
+                result.push(current.trim().replace(/^"(.*)"$/, '$1'));
+                return result;
+            }
+            
+            const rawHeaders = parseCSVLine(lines[0]);
+            const headers = rawHeaders.map(h => h.toLowerCase().trim());
+            
+            console.log("CSV Headers:", rawHeaders);
+            console.log("Headers (normalized):", headers);
+            console.log("Header count:", headers.length);
+            
+            // Find column indices
+            const indices = {
+                isin: headers.findIndex(h => h.includes('isin')),
+                fundName: headers.findIndex(h => h.includes('fund name')),
+                fundNumber: headers.findIndex(h => h.includes('fund number')),
+                transType: headers.findIndex(h => h.includes('transaction type')),
+                purchases: headers.findIndex(h => h === 'purchases'),
+                sales: headers.findIndex(h => h === 'sales'),
+                holdings: headers.findIndex(h => h === 'holdings'),
+                price: headers.findIndex(h => h.includes('price per share')),
+                date: headers.findIndex(h => h.includes('trade date')),
+                currency: headers.findIndex(h => h.includes('currency')),
+                entity: headers.findIndex(h => h.includes('entity')),
+                comments: headers.findIndex(h => h.includes('comments'))
+            };
+            
+            console.log("Column Indices:", indices);
+            
+            const data = [];
+            
+            for (let i = 1; i < lines.length; i++) {
+                if (!lines[i].trim()) continue;
+                
+                const values = parseCSVLine(lines[i]);
+                if (values.length < 2) continue;
+                
+                const row = {};
+                // Store both by index and by header name for easy access
+                rawHeaders.forEach((h, idx) => {
+                    const normalized = h.toLowerCase().trim();
+                    row[normalized] = values[idx] || '';
+                    row[h] = values[idx] || '';
+                });
+                
+                // Also add by index for debugging
+                row._values = values;
+                row._indices = indices;
+                
+                data.push(row);
+            }
+            
+            console.log("Parsed rows:", data.length);
+            if (data.length > 0) console.log("First row:", data[0]);
+            return data;
+        }
+
+        function parseDate(dateStr) {
+            if (!dateStr) return null;
+            const formats = [
+                /(\d{1,2})-(\d{1,2})-(\d{4})/, // MM-DD-YYYY
+                /(\d{4})-(\d{1,2})-(\d{1,2})/, // YYYY-MM-DD
+                /(\d{1,2})\/(\d{1,2})\/(\d{4})/ // MM/DD/YYYY
+            ];
+            
+            for (const fmt of formats) {
+                const match = dateStr.match(fmt);
+                if (!match) continue;
+                const [, p1, p2, p3] = match;
+                
+                if (fmt === formats[0]) return new Date(p3, p1-1, p2);
+                if (fmt === formats[1]) return new Date(p1, p2-1, p3);
+                if (fmt === formats[2]) return new Date(p3, p1-1, p2);
+            }
+            return null;
+        }
+
+        function parseNumber(str) {
+            if (!str) return 0;
+            // Remove quotes and commas from formatted numbers like "1,300.00"
+            const cleaned = String(str).replace(/"/g, '').replace(/,/g, '');
+            const result = parseFloat(cleaned);
+            return result;
+        }
+
+        function calculateLoss(transactions) {
+            const settlement = document.getElementById('settlementSelect').value;
+            const params = settlementParams[settlement];
+            
+            console.log(`\nFiltering by settlement period: ${params.classStartDate.toLocaleDateString()} to ${params.classEndDate.toLocaleDateString()}`);
+            
+            // Filter by settlement period - but INCLUDE all Beginning/End Holdings regardless of date
+            const filtered = transactions.filter(t => {
+                const indices = t._indices;
+                const transType = (t._values[indices.transType] || '').toUpperCase().trim();
+                
+                // Always include Beginning Holdings and End Holdings
+                if (transType.includes('BEGINNING') || transType.includes('END')) {
+                    return true;
+                }
+                
+                // For other transactions, check settlement period
+                const dateStr = t._values[indices.date] || '';
+                const date = parseDate(dateStr);
+                const fundName = t._values[indices.fundName] || '';
+                
+                // Debug Fund 63
+                if (fundName === 'Fund 63') {
+                    console.log(`Fund 63 - ${transType}: dateStr="${dateStr}", parsed=${date ? date.toLocaleDateString() : 'null'}, included=${date && date >= params.classStartDate && date <= params.classEndDate}`);
+                }
+                
+                return date && date >= params.classStartDate && date <= params.classEndDate;
+            });
+            
+            if (filtered.length === 0) {
+                throw new Error("No transactions within settlement period");
+            }
+
+            // Group by fund
+            const fundMap = {};
+
+            filtered.forEach(trans => {
+                const indices = trans._indices;
+                const values = trans._values;
+                
+                const fundName = values[indices.fundName] || 'Unknown';
+                const transType = (values[indices.transType] || '').toUpperCase().trim();
+                const client = values[indices.entity] || 'Unknown';
+                
+                if (!fundMap[fundName]) {
+                    fundMap[fundName] = { bh: 0, bhPrice: 0, purchases: [], sales: [], client };
+                }
+
+                const price = parseNumber(values[indices.price] || '');
+                const dateStr = values[indices.date] || '';
+                const date = parseDate(dateStr);
+                let qty = 0;
+
+                // Parse quantity based on transaction type
+                if (transType.includes('BEGINNING') || transType.includes('END')) {
+                    // For beginning and ending holdings, use holdings column
+                    qty = parseNumber(values[indices.holdings] || '');
+                    if (transType.includes('BEGINNING')) {
+                        fundMap[fundName].bh = qty;
+                        fundMap[fundName].bhPrice = price;
+                    }
+                }
+                else if (transType.includes('PURCHASE') || transType.includes('BUY')) {
+                    qty = parseNumber(values[indices.purchases] || '');
+                    if (qty > 0) {
+                        fundMap[fundName].purchases.push({ qty, price, date });
+                    }
+                }
+                else if (transType.includes('SALE') || transType.includes('SELL')) {
+                    qty = parseNumber(values[indices.sales] || '');
+                    if (qty > 0) {
+                        fundMap[fundName].sales.push({ qty, price, date });
+                    }
+                }
+            });
+
+            // Calculate losses using FIFO
+            let globalLoss = 0;
+            const fundResults = {};
+            const clientResults = {};
+
+            for (const [fundName, fundData] of Object.entries(fundMap)) {
+                const client = fundData.client;
+                if (!clientResults[client]) clientResults[client] = 0;
+
+                // Only process if there are sales
+                if (fundData.sales.length === 0) {
+                    fundResults[fundName] = { loss: 0, sold: 0 };
+                    continue;
+                }
+
+                // Simple Average Cost Method (works for Kraft, will work for Twitter)
+                let totalCost = 0;
+                let totalShares = 0;
+                
+                // Handle beginning holdings
+                if (fundData.bh > 0) {
+                    let bhPrice = fundData.bhPrice;
+                    
+                    // If no explicit BH price, MUST use highest purchase price
+                    if (bhPrice <= 0 && fundData.purchases.length > 0) {
+                        bhPrice = Math.max(...fundData.purchases.map(p => p.price));
+                    }
+                    
+                    if (bhPrice > 0) {
+                        totalShares += fundData.bh;
+                        totalCost += fundData.bh * bhPrice;
+                    }
+                }
+                
+                // Add all purchases
+                fundData.purchases.forEach(p => {
+                    totalShares += p.qty;
+                    totalCost += p.qty * p.price;
+                });
+                
+                // Calculate average cost per share
+                const avgCostPerShare = totalShares > 0 ? totalCost / totalShares : 0;
+                
+                // Calculate total sales
+                let totalSaleQty = 0;
+                let totalSaleProceeds = 0;
+                fundData.sales.forEach(s => {
+                    totalSaleQty += s.qty;
+                    totalSaleProceeds += s.qty * s.price;
+                });
+                
+                // Calculate loss
+                const costOfSharesSold = totalSaleQty * avgCostPerShare;
+                const fundLoss = Math.max(0, costOfSharesSold - totalSaleProceeds);
+                
+                if (fundName.includes('63')) {
+                    console.log(`FINAL CALC: avgCost=${avgCostPerShare}, saleQty=${totalSaleQty}, saleProceeds=${totalSaleProceeds}`);
+                    console.log(`costOfSharesSold=${costOfSharesSold}, loss=${fundLoss}`);
+                }
+                
+                fundResults[fundName] = { loss: fundLoss, sold: totalSaleQty };
+                clientResults[client] += fundLoss;
+                globalLoss += fundLoss;
+            }
+
+            return { totalLoss: globalLoss, fundResults, clientResults };
+        }
+
+        function calculateFromData() {
+            try {
+                const csv = document.getElementById('csvData').value;
+                if (!csv.trim()) throw new Error("No CSV data provided");
+
+                const transactions = parseCSV(csv);
+                if (transactions.length === 0) throw new Error("Failed to parse CSV data");
+
+                // Detect settlement type from data
+                const csv_lower = csv.toLowerCase();
+                let detectedSettlement = null;
+                if (csv_lower.includes('fund') && transactions.length > 0) {
+                    // Check if settlement period matches expected dates
+                    const settlement = document.getElementById('settlementSelect').value;
+                    const params = settlementParams[settlement];
+                    
+                    // Look for dates in data that might indicate wrong settlement
+                    let hasDateInRange = false;
+                    const otherSettlement = settlement === 'twitter' ? 'kraft' : 'twitter';
+                    const otherParams = settlementParams[otherSettlement];
+                    
+                    for (let trans of transactions) {
+                        const dateStr = trans._values[trans._indices.date] || '';
+                        const date = parseDate(dateStr);
+                        if (date) {
+                            if (date >= params.classStartDate && date <= params.classEndDate) {
+                                hasDateInRange = true;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    // If NO dates match selected settlement, warn user
+                    if (!hasDateInRange && transactions.length > 2) {
+                        throw new Error(`No transactions found in the selected settlement period (${params.classStartDate.toLocaleDateString()} to ${params.classEndDate.toLocaleDateString()}). Please verify you selected the correct settlement case.`);
+                    }
+                }
+
+                const results = calculateLoss(transactions);
+                
+                // Verify we got results
+                if (results.totalLoss === 0 && transactions.length > 2) {
+                    throw new Error("Calculation resulted in $0.00 loss. This may indicate a mismatch between the file and selected settlement case. Verify your selection.");
+                }
+                
+                displayResults(results);
+            } catch (error) {
+                showMessage(`Error: ${error.message}`, 'error');
+            }
+        }
+
+        // Store current results globally for export
+        let lastResults = null;
+
+        function displayResults(results) {
+            // Store for export
+            lastResults = results;
+            
+            const html = `
+                <div class="metric">
+                    <div class="metric-value">$${Math.abs(results.totalLoss).toFixed(2)}</div>
+                    <div class="metric-label">Total Recognized Loss</div>
+                </div>
+
+                <h3 style="margin-top:20px;">By Client:</h3>
+                <table>
+                    <tr><th>Client</th><th>Total Loss</th></tr>
+                    ${Object.entries(results.clientResults).map(([client, loss]) => 
+                        `<tr><td>${client}</td><td>$${loss.toFixed(2)}</td></tr>`
+                    ).join('')}
+                </table>
+
+                <h3 style="margin-top:20px;">By Fund (Top 15):</h3>
+                <table>
+                    <tr><th>Fund</th><th>Loss</th><th>Shares Sold</th></tr>
+                    ${Object.entries(results.fundResults)
+                        .sort((a, b) => b[1].loss - a[1].loss)
+                        .slice(0, 15)
+                        .map(([fund, data]) => 
+                            `<tr><td>${fund}</td><td>$${data.loss.toFixed(2)}</td><td>${data.sold}</td></tr>`
+                        ).join('')}
+                </table>
+
+                <button onclick="exportResults()" style="margin-top:20px;">Export to CSV</button>
+            `;
+            document.getElementById('resultsArea').innerHTML = html;
+            showMessage("Calculation complete!", 'success');
+        }
+
+        function downloadTemplate() {
+            const csv = "ISIN/Cusip,Fund Name,Fund Number,Transaction Type,Purchases,Sales,Holdings,Price per share,Trade Date,Currency,Entity,Comments\nUS0000000001,Example Fund,1,Beginning Holdings,,,1000,50.00,2-5-2015,USD,Client 1,Starting position\nUS0000000001,Example Fund,1,Purchase,100,,,52.00,3-1-2015,USD,Client 1,\nUS0000000001,Example Fund,1,Sale,,100,,48.00,4-1-2015,USD,Client 1,Settlement period transaction";
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'settlement_calculator_template.csv';
+            a.click();
+        }
+
+        function exportResults() {
+            if (!lastResults) {
+                showMessage("No results to export", 'error');
+                return;
+            }
+
+            // Build proper CSV
+            let csv = "Settlement Recognized Loss Report\n";
+            csv += new Date().toLocaleDateString() + "\n\n";
+            
+            const settlement = document.getElementById('settlementSelect').value;
+            const params = settlementParams[settlement];
+            csv += `Settlement Case: ${params.name}\n`;
+            csv += `Period: ${params.classStartDate.toLocaleDateString()} to ${params.classEndDate.toLocaleDateString()}\n\n`;
+            
+            // Total Loss
+            csv += "SUMMARY\n";
+            csv += `Total Recognized Loss,$${Math.abs(lastResults.totalLoss).toFixed(2)}\n\n`;
+            
+            // By Client
+            csv += "BY CLIENT\n";
+            csv += "Client,Total Loss\n";
+            Object.entries(lastResults.clientResults).forEach(([client, loss]) => {
+                csv += `${client},$${loss.toFixed(2)}\n`;
+            });
+            csv += "\n";
+            
+            // By Fund (Top 15)
+            csv += "BY FUND (Top 15)\n";
+            csv += "Fund,Loss,Shares Sold\n";
+            Object.entries(lastResults.fundResults)
+                .sort((a, b) => b[1].loss - a[1].loss)
+                .slice(0, 15)
+                .forEach(([fund, data]) => {
+                    csv += `${fund},$${data.loss.toFixed(2)},${data.sold}\n`;
+                });
+
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `settlement_results_${settlement}_${new Date().getTime()}.csv`;
+            a.click();
+            showMessage("CSV exported successfully!", 'success');
+        }
+
+        function clearAll() {
+            document.getElementById('csvData').value = '';
+            document.getElementById('csvFile').value = '';
+            document.getElementById('resultsArea').innerHTML = '<p style="color:#999;">No calculation yet.</p>';
+            document.getElementById('message').innerHTML = '';
+        }
+
+        function showMessage(msg, type) {
+            const el = document.getElementById('message');
+            el.className = type;
+            el.innerHTML = msg;
+        }
+
+        updateSettlementInfo();
+    </script>
+</body>
+</html>
